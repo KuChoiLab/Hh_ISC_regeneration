@@ -222,11 +222,6 @@ make_score_vln_by_condition <- function(obj, feat, title, suffix = "") {
           pt.size = 0, alpha = 0.3) +
     geom_boxplot(width = 0.3, alpha = 0.9) +
     scale_fill_manual(values = condition_colors) +
-    stat_compare_means(comparisons  = my_comparisons,
-                       method       = "wilcox.test",
-                       p.adjust.method = "BH",
-                       label        = "p.signif",
-                       tip.length   = 0.02, size = 4) +
     NoLegend() + theme(aspect.ratio = 1.2) +
     ggtitle(paste0(title, suffix))
 }
