@@ -70,106 +70,125 @@ DimPlot(ISC_annotated_seurat) + theme(aspect.ratio = 1) + ggtitle("Fig. 4d")
 dev.off()
 
 ## Fig. 4e ----
-distribution_table_cluster <- ISC_annotated_seurat@meta.data %>%                                                                                                                   
-  group_by(Sample_Name, idents_clusters) %>%                                                                                                                                       
-  dplyr::summarise(count = n(), .groups = "drop") %>%                                                                                                                              
-  tidyr::pivot_wider(names_from  = Sample_Name,                                                                                                                                    
-                     values_from = count,
-                     values_fill = 0)                                                                                                                                              
+cluster_pct_rep <- ISC_annotated_seurat@meta.data %>%
+  group_by(orig.ident, Sample_Name, idents_clusters) %>%
+  dplyr::summarise(count = n(), .groups = "drop") %>%
+  group_by(orig.ident, Sample_Name) %>%
+  mutate(pct = count / sum(count) * 100) %>%
+  ungroup()
 
-total_counts <- ISC_annotated_seurat@meta.data %>%                                                                                                                                 
-  group_by(Sample_Name) %>%
-  dplyr::summarise(total = n(), .groups = "drop") %>%                                                                                                                              
-  tibble::deframe()          # named numeric vector       
+cluster_pct <- cluster_pct_rep %>%
+  group_by(Sample_Name, idents_clusters) %>%
+  dplyr::summarise(
+    mean_pct = mean(pct),
+    sd_pct   = sd(pct),
+    n_rep    = n(),
+    .groups  = "drop"
+  )
 
-pairwise_comparisons <- list(                                                                                                                                                      
-  c("ENR", "SAG"),                                        
-  c("SAG", "PGE2"),                                                                                                                                                                
+pairwise_comparisons <- list(
+  c("ENR", "SAG"),
+  c("SAG", "PGE2"),
   c("ENR", "PGE2")
-)                                                                                                                                                                                  
+)
 
-pairwise_results_cluster <- lapply(seq_len(nrow(distribution_table_cluster)), function(i) {                                                                                        
-  cluster  <- as.character(distribution_table_cluster$idents_clusters[i])
-  counts   <- distribution_table_cluster[i, ]                                                                                                                                      
+pairwise_results_cluster <- lapply(unique(cluster_pct_rep$idents_clusters), function(cluster) {
+  sub <- cluster_pct_rep %>% filter(idents_clusters == cluster)
+  
   p_values <- sapply(pairwise_comparisons, function(grps) {
-    prop.test(                                                                                                                                                                     
-      x = c(as.integer(counts[[grps[1]]]), as.integer(counts[[grps[2]]])),
-      n = c(total_counts[grps[1]],         total_counts[grps[2]])                                                                                                                  
-    )$p.value                                                                                                                                                                      
+    g1 <- sub %>% filter(Sample_Name == grps[1]) %>% pull(pct)
+    g2 <- sub %>% filter(Sample_Name == grps[2]) %>% pull(pct)
+    
+    if (length(g1) < 2 | length(g2) < 2) return(NA_real_)
+    
+    t.test(g1, g2, var.equal = FALSE)$p.value
   })
-  data.frame(Cluster    = cluster,                                                                                                                                                 
-             Comparison = c("ENR vs SAG", "SAG vs PGE2", "ENR vs PGE2"),
-             p_value    = p_values)                                                                                                                                                
+  
+  data.frame(
+    Cluster    = cluster,
+    Comparison = c("ENR vs SAG", "SAG vs PGE2", "ENR vs PGE2"),
+    p_value    = p_values
+  )
 })
 
 pairwise_summary_cluster <- do.call(rbind, pairwise_results_cluster) %>%
   mutate(
-    padj_BH      = p.adjust(p_value, method = "BH"),                                                                                                                               
+    padj_BH      = p.adjust(p_value, method = "BH"),
     significance = case_when(
-      padj_BH < 0.001 ~ "***",                                                                                                                                                     
-      padj_BH < 0.01  ~ "**",                             
-      padj_BH < 0.05  ~ "*",                                                                                                                                                       
+      padj_BH < 0.001 ~ "***",
+      padj_BH < 0.01  ~ "**",
+      padj_BH < 0.05  ~ "*",
       TRUE            ~ "ns"
-    )                                                                                                                                                                              
-  )                                                       
+    )
+  )
 
-print(pairwise_summary_cluster[, c("Cluster", "Comparison", "padj_BH", "significance")])                                                                                           
+print(pairwise_summary_cluster[, c("Cluster", "Comparison", "padj_BH", "significance")])
 
-cond_order <- c("ENR", "SAG", "PGE2")                     
-dodge_w    <- 0.9                                                                                                                                                                  
-step       <- dodge_w / length(cond_order) 
-offsets    <- setNames(                                                                                                                                                            
+cond_order <- c("ENR", "SAG", "PGE2")
+dodge_w    <- 0.6
+step       <- dodge_w / length(cond_order)
+offsets    <- setNames(
   (seq_along(cond_order) - (length(cond_order) + 1) / 2) * step,
-  cond_order                                                                                                                                                                       
-)   # ENR = -0.3, SAG = 0, PGE2 = +0.3                    
+  cond_order
+)
 
-x_pos <- setNames(seq_along(cluster_order), cluster_order)                                                                                                                         
+x_pos <- setNames(seq_along(cluster_order), cluster_order)
 
-max_pct_by_cluster <- cluster_pct %>%                                                                                                                                              
+max_pct_by_cluster <- cluster_pct %>%
   group_by(idents_clusters) %>%
-  summarise(max_pct = max(pct), .groups = "drop")                                                                                                                                  
+  summarise(max_pct = max(mean_pct + replace_na(sd_pct, 0)), .groups = "drop")
 
-sig_brackets <- pairwise_summary_cluster %>%                                                                                                                                       
+sig_brackets <- pairwise_summary_cluster %>%
   filter(significance != "ns") %>%
-  mutate(                                                                                                                                                                          
-    g1        = sub(" vs .*", "", Comparison),            
+  mutate(
+    g1        = sub(" vs .*", "", Comparison),
     g2        = sub(".* vs ", "", Comparison),
     x_cluster = x_pos[Cluster],
-    xmin      = x_cluster + offsets[g1],                                                                                                                                           
+    xmin      = x_cluster + offsets[g1],
     xmax      = x_cluster + offsets[g2]
-  ) %>%                                                                                                                                                                            
+  ) %>%
   left_join(max_pct_by_cluster, by = c("Cluster" = "idents_clusters")) %>%
-  arrange(Cluster, xmin) %>%                                                                                                                                                       
+  arrange(Cluster, xmin) %>%
   group_by(Cluster) %>%
-  mutate(y = max_pct * (1.08 + (row_number() - 1) * 0.12)) %>%                                                                                                                     
-  ungroup()                                                                                                                                                                        
+  mutate(y = max_pct * (1.08 + (row_number() - 1) * 0.12)) %>%
+  ungroup()
 
-tick_h <- diff(range(cluster_pct$pct)) * 0.015
+tick_h <- diff(range(cluster_pct$mean_pct)) * 0.015
 
 pdf(file.path(OUTPUT_DIR, "Fig4e_cluster_proportion_per_condition.pdf"),
-    width = 14, height = 5)                                                                                                                                                        
-ggplot(cluster_pct,                                       
-       aes(x = factor(idents_clusters, levels = cluster_order),                                                                                                                    
-           y = pct, fill = Sample_Name)) +                
-  geom_bar(stat = "identity", position = position_dodge(width = dodge_w)) +                                                                                                        
+    width = 14, height = 5)
+
+ggplot(cluster_pct,
+       aes(x    = factor(idents_clusters, levels = cluster_order),
+           y    = mean_pct,
+           fill = Sample_Name)) +
+  geom_bar(stat = "identity", position = position_dodge(width = 0.6), width = 0.6) +
+  geom_errorbar(
+    aes(ymin = mean_pct - sd_pct,
+        ymax = mean_pct + sd_pct),
+    position  = position_dodge(width = 0.6),
+    width     = 0.25,
+    linewidth = 0.4
+  ) +
   scale_fill_manual(values = condition_colors) +
-  geom_segment(data = sig_brackets,                                                                                                                                                
-               aes(x = xmin, xend = xmax, y = y, yend = y),
-               inherit.aes = FALSE, linewidth = 0.35) +                                                                                                                            
   geom_segment(data = sig_brackets,
-               aes(x = xmin, xend = xmin, y = y - tick_h, yend = y),                                                                                                               
-               inherit.aes = FALSE, linewidth = 0.35) +                                                                                                                            
-  geom_segment(data = sig_brackets,                                                                                                                                                
+               aes(x = xmin, xend = xmax, y = y, yend = y),
+               inherit.aes = FALSE, linewidth = 0.35) +
+  geom_segment(data = sig_brackets,
+               aes(x = xmin, xend = xmin, y = y - tick_h, yend = y),
+               inherit.aes = FALSE, linewidth = 0.35) +
+  geom_segment(data = sig_brackets,
                aes(x = xmax, xend = xmax, y = y - tick_h, yend = y),
-               inherit.aes = FALSE, linewidth = 0.35) +                                                                                                                            
-  geom_text(data = sig_brackets,                                                                                                                                                   
-            aes(x = (xmin + xmax) / 2, y = y + tick_h * 0.5,                                                                                                                       
+               inherit.aes = FALSE, linewidth = 0.35) +
+  geom_text(data = sig_brackets,
+            aes(x = (xmin + xmax) / 2, y = y + tick_h * 0.5,
                 label = significance),
-            inherit.aes = FALSE, size = 2.2, vjust = 0) +                                                                                                                          
-  labs(title = "Fig. 4e", x = NULL, y = "Cell proportion (%)") +                                                                                                                   
+            inherit.aes = FALSE, size = 2.2, vjust = 0) +
+  labs(title = "Fig. 4e", x = NULL, y = "Cell proportion (%)") +
   theme_minimal(base_size = 9) +
-  theme(axis.text.x  = element_text(angle = 45, hjust = 1),                                                                                                                        
-        legend.title = element_blank())                                                                                                                                            
+  theme(axis.text.x  = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank())
+
 dev.off()
 
 ## Fig. 4f ----
@@ -280,56 +299,53 @@ dev.off()
 ISC_annotated_seurat_stem    <- subset(ISC_annotated_seurat, idents %in% stem_clusters)
 ISC_annotated_seurat_nonstem <- subset(ISC_annotated_seurat, !idents %in% stem_clusters)
 
-get_sig_labels <- function(seurat_obj, y_pos = 0.72) {                                  
-  meta   <- seurat_obj@meta.data                                                                                                                                                   
-  scores <- split(meta$CytoTRACE2_Score, meta$Sample_Name)                                                                                                                         
-  
-  p_vals <- c(                                                                                                                                                                     
-    SAG  = wilcox.test(scores[["ENR"]], scores[["SAG"]])$p.value,                                                                                                                  
-    PGE2 = wilcox.test(scores[["ENR"]], scores[["PGE2"]])$p.value
-  )                                                                                                                                                                                
-  padj <- p.adjust(p_vals, method = "BH")
-  
-  data.frame(                                             
-    group = names(padj),
-    padj  = padj,                                                                                                                                                                  
-    label = case_when(
-      padj < 0.001 ~ "***",                                                                                                                                                        
-      padj < 0.01  ~ "**",                                
-      padj < 0.05  ~ "*",
-      TRUE         ~ ""                                                                                                                                                            
-    ),
-    y = y_pos,                                                                                                                                                                     
-    stringsAsFactors = FALSE                              
-  ) %>%
-    dplyr::filter(label != "")
+get_cytotrace_summary <- function(seurat_obj) {
+  seurat_obj@meta.data %>%
+    mutate(orig.ident  = as.character(orig.ident),
+           Sample_Name = as.character(Sample_Name)) %>%
+    group_by(orig.ident, Sample_Name) %>%
+    dplyr::summarise(mean_score = mean(CytoTRACE2_Score, na.rm = TRUE),
+                     .groups = "drop") %>%
+    group_by(Sample_Name) %>%
+    dplyr::summarise(
+      sd_score   = sd(mean_score),
+      mean_score = mean(mean_score),
+      .groups    = "drop"
+    )
 }
 
-sig_all <- get_sig_labels(ISC_annotated_seurat)                                                                                                                                    
-sig_sc  <- get_sig_labels(ISC_annotated_seurat_stem)
-sig_nsc <- get_sig_labels(ISC_annotated_seurat_nonstem)                                                                                                                            
+sum_all <- get_cytotrace_summary(ISC_annotated_seurat)
+sum_sc  <- get_cytotrace_summary(ISC_annotated_seurat_stem)
+sum_nsc <- get_cytotrace_summary(ISC_annotated_seurat_nonstem)
 
-make_vln <- function(seurat_obj, title, sig_df) {                                                                                                                                  
-  VlnPlot(seurat_obj, features = "CytoTRACE2_Score",                                                                                                                               
-          group.by = "Sample_Name", pt.size = 0) +
-    geom_boxplot(alpha = 0.5, width = 0.2) +                                                                                                                                       
-    scale_fill_manual(values = condition_colors) +                                                                                                                                 
-    scale_y_continuous(breaks = c(0, 0.25, 0.50, 0.75),
-                       limits = c(0, 0.75)) +                                                                                                                                      
-    geom_text(data = sig_df,                              
-              aes(x = group, y = y, label = label),                                                                                                                                
-              inherit.aes = FALSE, size = 4, vjust = 0) + 
-    NoLegend() + ggtitle(title) +                                                                                                                                                  
-    theme(aspect.ratio = 1.2)
-}                                                                                                                                                                                  
+make_bar_vln <- function(summary_df, title) {
+  ggplot(summary_df,
+         aes(x    = factor(Sample_Name, levels = cond_order),
+             y    = mean_score,
+             fill = Sample_Name)) +
+    geom_bar(stat = "identity", width = 0.6) +
+    geom_errorbar(
+      aes(ymin = mean_score - sd_score,
+          ymax = mean_score + sd_score),
+      width     = 0.2,
+      linewidth = 0.4
+    ) +
+    scale_fill_manual(values = condition_colors) +
+    scale_y_continuous(limits = c(0, 0.67),
+                       breaks = c(0, 0.2, 0.4, 0.6)) +
+    labs(title = title, x = NULL, y = "Potency Score") +
+    theme_minimal(base_size = 9) +
+    NoLegend() +
+    theme(aspect.ratio = 1)
+}
 
-p_all <- make_vln(ISC_annotated_seurat,         "All clusters",    sig_all)
-p_sc  <- make_vln(ISC_annotated_seurat_stem,    "SC clusters",     sig_sc)                                                                                                         
-p_nsc <- make_vln(ISC_annotated_seurat_nonstem, "Non-SC clusters", sig_nsc)                                                                                                        
+p_all <- make_bar_vln(sum_all,  "All clusters")
+p_sc  <- make_bar_vln(sum_sc,   "SC clusters")
+p_nsc <- make_bar_vln(sum_nsc,  "Non-SC clusters")
 
-pdf(file.path(OUTPUT_DIR, "Fig4h_CytoTRACE2_violin.pdf"), width = 10, height = 4)                                                                                                  
-p_all | p_sc | p_nsc                                                                                                                                                               
-dev.off() 
+pdf(file.path(OUTPUT_DIR, "Fig4h_CytoTRACE2_barplot.pdf"), width = 10, height = 4)
+p_all | p_sc | p_nsc
+dev.off()
 
 ## Fig. 4i ----
 
